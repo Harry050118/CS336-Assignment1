@@ -98,6 +98,7 @@ def train_bpe(
     vocab_size: int,
     special_tokens: list[str] | None = None,
     show_progress: bool = False,
+    progress_interval_pct: int = 10,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     if vocab_size <= 0:
         raise ValueError("vocab_size must be positive")
@@ -122,6 +123,8 @@ def train_bpe(
     merges: list[tuple[bytes, bytes]] = []
     pair_heap = build_pair_heap(pair_counter, vocab)
     merges_to_learn = vocab_size - len(vocab)
+    safe_interval_pct = max(1, min(100, progress_interval_pct))
+    next_progress_pct = safe_interval_pct
 
     merge_iter = range(merges_to_learn)
     if show_progress:
@@ -149,6 +152,26 @@ def train_bpe(
             pair_heap=pair_heap,
             pair_to_words=pair_to_words,
         )
+
+        if show_progress and merges_to_learn > 0:
+            completed_merges = len(merges)
+            completed_pct = int((completed_merges * 100) / merges_to_learn)
+            while completed_pct >= next_progress_pct and next_progress_pct <= 100:
+                print(
+                    f"[train_bpe] progress: {next_progress_pct}% ({completed_merges}/{merges_to_learn} merges)",
+                    flush=True,
+                )
+                next_progress_pct += safe_interval_pct
+
+    if show_progress and merges_to_learn > 0 and next_progress_pct <= 100:
+        completed_merges = len(merges)
+        completed_pct = int((completed_merges * 100) / merges_to_learn)
+        while completed_pct >= next_progress_pct and next_progress_pct <= 100:
+            print(
+                f"[train_bpe] progress: {next_progress_pct}% ({completed_merges}/{merges_to_learn} merges)",
+                flush=True,
+            )
+            next_progress_pct += safe_interval_pct
 
     return vocab, merges
 
@@ -195,9 +218,10 @@ def _build_word_counter_fast(text: str, special_tokens: list[str]) -> Counter[tu
 def _build_word_counter_from_file_fast(
     input_path: str | os.PathLike,
     special_tokens: list[str],
+    show_progress: bool = False,
 ) -> Counter[tuple[int, ...]]:
     split_special_token = special_tokens[0].encode("utf-8") if special_tokens else b"\n"
-    desired_chunks = max(1, min(4, os.cpu_count() or 1))
+    desired_chunks = max(16, min(64, (os.cpu_count() or 1) * 4))
 
     with open(input_path, "rb") as file:
         boundaries = find_chunk_boundaries(
@@ -206,8 +230,13 @@ def _build_word_counter_from_file_fast(
             split_special_token=split_special_token,
         )
 
+        chunk_ranges = list(zip(boundaries[:-1], boundaries[1:]))
+        chunk_iter = chunk_ranges
+        if show_progress:
+            chunk_iter = tqdm(chunk_ranges, total=len(chunk_ranges), desc="build_word_counter_fast", unit="chunk", dynamic_ncols=True, mininterval=0.2)
+
         word_counter: Counter[tuple[int, ...]] = Counter()
-        for start, end in zip(boundaries[:-1], boundaries[1:]):
+        for start, end in chunk_iter:
             file.seek(start)
             text_chunk = file.read(end - start).decode("utf-8", errors="ignore")
             word_counter.update(_build_word_counter_fast(text_chunk, special_tokens))
@@ -220,6 +249,7 @@ def train_bpe_fast(
     vocab_size: int,
     special_tokens: list[str] | None = None,
     show_progress: bool = False,
+    progress_interval_pct: int = 10,
 ) -> tuple[dict[int, bytes], list[tuple[bytes, bytes]]]:
     if vocab_size <= 0:
         raise ValueError("vocab_size must be positive")
@@ -238,16 +268,22 @@ def train_bpe_fast(
     if len(vocab) >= vocab_size:
         return vocab, []
 
-    word_counter = _build_word_counter_from_file_fast(input_path, special_tokens)
+    word_counter = _build_word_counter_from_file_fast(
+        input_path,
+        special_tokens,
+        show_progress=show_progress,
+    )
     pair_counter, pair_to_words = _build_pair_stats(word_counter)
 
     merges: list[tuple[bytes, bytes]] = []
     pair_heap = build_pair_heap(pair_counter, vocab)
     merges_to_learn = vocab_size - len(vocab)
+    safe_interval_pct = max(1, min(100, progress_interval_pct))
+    next_progress_pct = safe_interval_pct
 
     merge_iter = range(merges_to_learn)
     if show_progress:
-        merge_iter = tqdm(merge_iter, total=merges_to_learn, desc="train_bpe_fast", unit="merge")
+        merge_iter = tqdm(merge_iter, total=merges_to_learn, desc="train_bpe_fast", unit="merge", dynamic_ncols=True, mininterval=0.2)
 
     for _ in merge_iter:
         if not pair_counter:
@@ -271,5 +307,25 @@ def train_bpe_fast(
             pair_heap=pair_heap,
             pair_to_words=pair_to_words,
         )
+
+        if show_progress and merges_to_learn > 0:
+            completed_merges = len(merges)
+            completed_pct = int((completed_merges * 100) / merges_to_learn)
+            while completed_pct >= next_progress_pct and next_progress_pct <= 100:
+                print(
+                    f"[train_bpe_fast] progress: {next_progress_pct}% ({completed_merges}/{merges_to_learn} merges)",
+                    flush=True,
+                )
+                next_progress_pct += safe_interval_pct
+
+    if show_progress and merges_to_learn > 0 and next_progress_pct <= 100:
+        completed_merges = len(merges)
+        completed_pct = int((completed_merges * 100) / merges_to_learn)
+        while completed_pct >= next_progress_pct and next_progress_pct <= 100:
+            print(
+                f"[train_bpe_fast] progress: {next_progress_pct}% ({completed_merges}/{merges_to_learn} merges)",
+                flush=True,
+            )
+            next_progress_pct += safe_interval_pct
 
     return vocab, merges

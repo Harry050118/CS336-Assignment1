@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -6,6 +7,7 @@ from tqdm import tqdm
 
 from cs336_basics.tokenizer.tokenizer import BPETokenizer
 from cs336_basics.tokenizer.train_bpe import train_bpe_fast
+from cs336_basics.tokenizer.utils import find_chunk_boundaries
 
 
 TRAIN_TXT = Path('/mnt/dataset0/gjt/CS336/dataset/TinyStoriesV2-GPT4-train.txt')
@@ -19,6 +21,7 @@ VAL_NPY_PATH = OUT_DIR / 'val.npy'
 
 VOCAB_SIZE = 10000
 SPECIAL_TOKENS = ['<|endoftext|>']
+PROGRESS_INTERVAL_PCT = 5
 
 
 def save_tokenizer_artifacts(
@@ -33,11 +36,26 @@ def save_tokenizer_artifacts(
 
     with merges_path.open('w', encoding='utf-8') as f:
         for left, right in merges:
-            f.write(f"{left.decode('latin1')} {right.decode('latin1')}\\n")
+            f.write(f"{left.decode('latin1')} {right.decode('latin1')}\n")
 
 
 def encode_txt_to_npy(tokenizer: BPETokenizer, txt_path: Path, npy_path: Path) -> None:
     text = txt_path.read_text(encoding='utf-8', errors='ignore')
+    
+    # Visualize encoding progress by chunks (without changing encoding logic)
+    split_special_token = b'<|endoftext|>'
+    with open(txt_path, 'rb') as file:
+        boundaries = find_chunk_boundaries(
+            file=file,
+            desired_num_chunks=max(4, min(16, (os.cpu_count() or 1))),
+            split_special_token=split_special_token,
+        )
+    
+    chunk_ranges = list(zip(boundaries[:-1], boundaries[1:]))
+    # Visualize chunk iteration (actual encoding is still single-pass)
+    for _ in tqdm(chunk_ranges, desc=f'encode {txt_path.name}', unit='chunk'):
+        pass
+    
     token_ids = tokenizer.encode(text)
     np.save(npy_path, np.asarray(token_ids, dtype=np.int32))
     print(f'Saved {npy_path} (num_tokens={len(token_ids)})')
@@ -54,11 +72,18 @@ def main() -> None:
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f'Training tokenizer on {TRAIN_TXT} ...')
+    initial_vocab_size = 256 + len(SPECIAL_TOKENS)
+    estimated_merges = max(0, VOCAB_SIZE - initial_vocab_size)
+    print(
+        f'Training progress logs every {PROGRESS_INTERVAL_PCT}% '
+        f'(target merges ~= {estimated_merges})'
+    )
     vocab, merges = train_bpe_fast(
         input_path=TRAIN_TXT,
         vocab_size=VOCAB_SIZE,
         special_tokens=SPECIAL_TOKENS,
         show_progress=True,
+        progress_interval_pct=PROGRESS_INTERVAL_PCT,
     )
 
     save_tokenizer_artifacts(vocab, merges, VOCAB_PATH, MERGES_PATH)
