@@ -40,9 +40,6 @@ def save_tokenizer_artifacts(
 
 
 def encode_txt_to_npy(tokenizer: BPETokenizer, txt_path: Path, npy_path: Path) -> None:
-    text = txt_path.read_text(encoding='utf-8', errors='ignore')
-    
-    # Visualize encoding progress by chunks (without changing encoding logic)
     split_special_token = b'<|endoftext|>'
     with open(txt_path, 'rb') as file:
         boundaries = find_chunk_boundaries(
@@ -50,15 +47,19 @@ def encode_txt_to_npy(tokenizer: BPETokenizer, txt_path: Path, npy_path: Path) -
             desired_num_chunks=max(4, min(16, (os.cpu_count() or 1))),
             split_special_token=split_special_token,
         )
-    
+
     chunk_ranges = list(zip(boundaries[:-1], boundaries[1:]))
-    # Visualize chunk iteration (actual encoding is still single-pass)
-    for _ in tqdm(chunk_ranges, desc=f'encode {txt_path.name}', unit='chunk'):
-        pass
-    
-    token_ids = tokenizer.encode(text)
-    np.save(npy_path, np.asarray(token_ids, dtype=np.int32))
-    print(f'Saved {npy_path} (num_tokens={len(token_ids)})')
+    all_token_ids = []
+
+    with open(txt_path, 'rb') as file:
+        for start, end in tqdm(chunk_ranges, desc=f'encode {txt_path.name}', unit='chunk'):
+            file.seek(start)
+            chunk_bytes = file.read(end - start)
+            chunk_text = chunk_bytes.decode('utf-8', errors='ignore')
+            all_token_ids.extend(tokenizer.encode(chunk_text))
+
+    np.save(npy_path, np.asarray(all_token_ids, dtype=np.int32))
+    print(f'Saved {npy_path} (num_tokens={len(all_token_ids)})')
 
 
 def main() -> None:
